@@ -1,26 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { UserChat } from './pages/UserChat';
+import { DeveloperChat } from './pages/DeveloperChat';
+import { SplashScreen } from './components/SplashScreen';
 import { ChatInput } from './components/ChatInput';
 import { ChatMessage } from './components/ChatMessage';
-import { SplashScreen } from './components/SplashScreen';
+import { CheckCircle2, Wrench, List } from 'lucide-react';
+import { Message } from './types';
 import { getGloriaResponse, getWolframVisualization, getAudioResponse, checkOpenAIKey, getAvailableModels } from './services/api';
-import type { Message, ChatState } from './types';
-import { Wrench, CheckCircle2, List } from 'lucide-react';
+import { getWelcomeMessage } from './config/constants';
 
 function App() {
   const [showSplash, setShowSplash] = useState(true);
-  const [apiKeyStatus, setApiKeyStatus] = useState<'checking' | 'valid' | 'error' | null>(null);
-  const [apiStatusMessage, setApiStatusMessage] = useState<string>('');
-  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
-  const [chatState, setChatState] = useState<ChatState>({
-    messages: [{
-      id: 'welcome',
-      role: 'assistant',
-      content: '¡Hola! Bienvenido a Proyecto: Globo — tu asistente de confianza para ayudarte con las tareas de matemáticas de quinto grado.\n\nEstoy aquí para apoyarte, paso a paso, con explicaciones claras y ejemplos que realmente hacen sentido. Puedes escribirme el problema que tiene tu hijo, o si prefieres, también puedes subir una foto del ejercicio que te mandó la maestra.\n\n¿Quieres empezar? Solo dime o envíame la imagen del problema y lo resolvemos juntos.',
-      timestamp: Date.now(),
-    }],
+  const [chatState, setChatState] = useState({
+    messages: [],
     isLoading: false,
     error: null,
+    developerMode: false
   });
+  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [messageKey, setMessageKey] = useState(Date.now().toString());
+  const [apiKeyStatus, setApiKeyStatus] = useState<'checking' | 'valid' | 'error'>('checking');
+  const [apiStatusMessage, setApiStatusMessage] = useState('');
+  const [developerMode, setDeveloperMode] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => setShowSplash(false), 2000);
@@ -43,7 +46,7 @@ function App() {
     }));
 
     try {
-      const gloriaResponse = await getGloriaResponse(content);
+      const gloriaResponse = await getGloriaResponse(content, developerMode);
       let wolframImage;
 
       if (gloriaResponse?.wolfram_query) {
@@ -54,7 +57,8 @@ function App() {
       const assistantMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: gloriaResponse.content,
+        content: gloriaResponse.content || '',
+        steps: gloriaResponse.steps,
         wolframImage,
         send_to_voice: gloriaResponse.send_to_voice,
         timestamp: Date.now(),
@@ -76,12 +80,15 @@ function App() {
 
   const handlePlayAudio = async (text: string) => {
     try {
-      // Stop current audio if playing
+      // Always stop current audio and clean up
       if (currentAudio) {
         currentAudio.pause();
         currentAudio.currentTime = 0;
+        URL.revokeObjectURL(currentAudio.src);
         setCurrentAudio(null);
-        return;
+        setIsAudioPlaying(false);
+        // Ensure complete cleanup before starting new audio
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
 
       // Add validation to check if text exists and is not empty
@@ -102,6 +109,7 @@ function App() {
       });
       
       setCurrentAudio(audio);
+      setIsAudioPlaying(true);
       audio.play();
     } catch (error) {
       console.error('Error al reproducir audio:', error);
@@ -109,103 +117,26 @@ function App() {
     }
   };
 
+  const stopCurrentAudio = async () => {
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+      URL.revokeObjectURL(currentAudio.src);
+      setCurrentAudio(null);
+      setIsAudioPlaying(false);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#151515] text-gray-100">
       {showSplash && <SplashScreen />}
       <main className="container mx-auto px-4 py-8 max-w-4xl">
-        <div className="space-y-8">
-          <header className="text-center">
-            <h1 className="text-3xl font-bold mb-4">Proyecto: Globo</h1>
-            <p className="text-gray-400 mb-6">Tu asistente inteligente de matemáticas en español</p>
-          </header>
-
-          <div className="bg-gray-900 rounded-xl p-4 min-h-[400px] max-h-[600px] overflow-y-auto">
-            {chatState.messages.map(message => (
-              <ChatMessage
-                key={message.id}
-                message={message}
-                onPlayAudio={handlePlayAudio}
-              />
-            ))}
-            
-            {chatState.isLoading && (
-              <div className="text-center py-4">
-                <div className="animate-pulse text-gray-400">
-                  Un momento, estoy analizando tu pregunta...
-                </div>
-              </div>
-            )}
-            
-            {chatState.error && (
-              <div className="text-red-500 text-center py-4">
-                {chatState.error}
-              </div>
-            )}
-          </div>
-
-          <ChatInput
-            onSendMessage={handleSendMessage}
-            isLoading={chatState.isLoading}
-          >
-            <div className="mt-2 flex items-center gap-2 text-sm text-gray-400">
-              <span>Developer Mode:</span>
-              <button
-                onClick={() => {
-                  setApiKeyStatus('checking');
-                  setApiStatusMessage('Checking API key...');
-                  checkOpenAIKey()
-                    .then(() => {
-                      setApiKeyStatus('valid');
-                      setChatState(prev => ({
-                        ...prev,
-                        messages: [...prev.messages, {
-                          id: Date.now().toString(),
-                          role: 'assistant',
-                          content: 'Hello RC. Your API Key is valid and working in Project Globo',
-                          timestamp: Date.now(),
-                        }],
-                      }));
-                    })
-                    .catch(() => {
-                      setApiKeyStatus('error');
-                      setApiStatusMessage('API key verification failed');
-                    });
-                }}
-                disabled={apiKeyStatus === 'checking'}
-                className="p-2 text-gray-400 hover:text-gray-100 transition-colors disabled:opacity-50"
-                title={apiKeyStatus === 'valid' ? 'API Key válida' : 'Verificar API Key'}
-              >
-                {apiKeyStatus === 'valid' ? <CheckCircle2 size={16} className="text-green-500" /> : <Wrench size={16} />}
-              </button>
-              <button
-                onClick={async () => {
-                  try {
-                    const response = await getAvailableModels();
-                    const modelsList = response.models.join('\n');
-                    setChatState(prev => ({
-                      ...prev,
-                      messages: [...prev.messages, {
-                        id: Date.now().toString(),
-                        role: 'assistant',
-                        content: `Hello RC. The following AI models are available to you in Project Globo:\n\n${modelsList}`,
-                        timestamp: Date.now(),
-                      }],
-                    }));
-                  } catch (error) {
-                    setApiStatusMessage('Failed to fetch models');
-                  }
-                }}
-                className="p-2 text-gray-400 hover:text-gray-100 transition-colors"
-                title="List Available Models"
-              >
-                <List size={16} />
-              </button>
-              {apiStatusMessage && (
-                <span className="text-xs">{apiStatusMessage}</span>
-              )}
-            </div>
-          </ChatInput>
-        </div>
+        <Routes>
+          <Route path="/" element={<UserChat />} />
+          <Route path="/developer" element={<DeveloperChat />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </main>
     </div>
   );

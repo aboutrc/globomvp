@@ -71,7 +71,7 @@ export async function checkOpenAIKey() {
   }
 }
 
-export async function getGloriaResponse(message: string) {
+export async function getGloriaResponse(message: string, developerMode: boolean = false) {
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -94,6 +94,9 @@ export async function getGloriaResponse(message: string) {
     // Remove trailing slash from URL if present
     const baseUrl = supabaseUrl.replace(/\/$/, '');
     
+    // Get previous messages from localStorage
+    const previousMessages = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+    
     const response = await fetch(`${baseUrl}/functions/v1/openai`, {
       method: 'POST',
       headers: {
@@ -104,7 +107,9 @@ export async function getGloriaResponse(message: string) {
       body: JSON.stringify({ 
         message: trimmedMessage,
         isImage: isImageMessage,
-        maxTokens: isImageMessage ? 1000 : 500 // Increase tokens for image analysis
+        developer_mode: developerMode,
+        maxTokens: isImageMessage ? 1000 : 500, // Increase tokens for image analysis
+        previousMessages: previousMessages.slice(-5) // Send last 5 messages for context
       })
     });
 
@@ -135,6 +140,32 @@ export async function getGloriaResponse(message: string) {
       throw new Error('Empty response received');
     }
 
+    // Update chat history in localStorage
+    previousMessages.push({
+      role: 'user',
+      content: trimmedMessage
+    });
+    previousMessages.push({
+      role: 'assistant',
+      content: data.content
+    });
+    localStorage.setItem('chatHistory', JSON.stringify(previousMessages));
+
+    // Parse the response if it's JSON
+    if (typeof data.content === 'string' && data.content.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(data.content);
+        return {
+          content: parsed.steps.map(step => step.content).join('\n'),
+          steps: parsed.steps,
+          send_to_voice: parsed.send_to_voice,
+          wolfram_query: parsed.wolfram_query
+        };
+      } catch (e) {
+        console.error('Failed to parse JSON response:', e);
+      }
+    }
+
     return data;
   } catch (error) {
     console.error('OpenAI API Error:', error);
@@ -151,10 +182,24 @@ export async function getWolframVisualization(query: string) {
   return response.json();
 }
 
-export async function getAudioResponse(text: string) {
+export async function getAudioResponse(text: string, isDeveloperMode: boolean = false) {
   if (!text.trim()) {
     throw new Error('Text cannot be empty');
   }
+
+  // Use different voice IDs for English and Spanish
+  const voiceId = isDeveloperMode ? 
+    'EXAVITQu4vr4xnSDxMaL' : // Sarah (English)
+    'iBGVhgcEZS6A5gTOjqSJ'; // New Spanish voice
+
+  // Optimize voice settings based on mode
+  const voiceSettings = isDeveloperMode ? {
+    stability: 0.5,
+    similarity_boost: 0.5,
+  } : {
+    stability: 0.35,  // Lower stability for more expressiveness
+    similarity_boost: 0.75, // Higher similarity to maintain voice character
+  };
 
   const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${API_KEYS.elevenlabs.voiceId}`, {
     method: 'POST',
@@ -164,10 +209,8 @@ export async function getAudioResponse(text: string) {
     },
     body: JSON.stringify({
       text,
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.5,
-      },
+      voice_settings: voiceSettings,
+      model_id: "eleven_multilingual_v2",
     }),
   });
 
